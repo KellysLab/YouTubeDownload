@@ -1,0 +1,570 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YouTube Video Downloader</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100">
+    <div class="container mx-auto px-4 py-8 max-w-6xl">
+        <!-- 标题部分 -->
+        <div class="text-center mb-8">
+            <h1 class="text-4xl font-bold text-gray-800 mb-2">YouTube Video Downloader</h1>
+            <p class="text-gray-600">Enter a YouTube URL to download videos easily</p>
+        </div>
+
+        <!-- 状态消息 -->
+        <div id="status-message" class="mb-4 p-4 rounded-lg hidden"></div>
+
+        <!-- 下载表单 -->
+        <div class="bg-white rounded-lg shadow-md p-6 mb-8">
+            <div class="flex gap-2 mb-6">
+                <input type="text" 
+                       id="url-input"
+                       placeholder="Enter YouTube URL" 
+                       class="flex-1 px-4 py-2 border rounded-lg focus:outline-none focus:border-blue-500">
+                <button onclick="getVideoInfo()" 
+                        class="px-6 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors"
+                        id="info-btn">
+                    Get Info
+                </button>
+            </div>
+
+            <!-- 视频信息和下载选项 -->
+            <div id="video-info" class="hidden">
+                <div class="bg-white rounded-lg shadow-lg p-6">
+                    <!-- 视频基本信息 -->
+                    <div class="flex gap-6">
+                        <!-- 左侧缩略图 -->
+                        <div class="w-96">
+                            <img id="video-thumbnail" class="w-full h-auto rounded-lg shadow" src="" alt="thumbnail">
+                        </div>
+                        
+                        <!-- 右侧信息 -->
+                        <div class="flex-1 space-y-3">
+                            <h3 id="video-title" class="text-2xl font-bold text-gray-800"></h3>
+                            
+                            <div class="flex items-center gap-4 text-gray-600">
+                                <div class="flex items-center gap-2">
+                                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                                    </svg>
+                                    <span id="video-duration"></span>
+                                </div>
+                                <div class="flex items-center gap-2">
+                                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"></path>
+                                    </svg>
+                                    <span id="video-resolution"></span>
+                                </div>
+                            </div>
+                            
+                            <p id="video-description" class="text-gray-600 text-sm line-clamp-3"></p>
+                        </div>
+                    </div>
+
+                    <!-- 下载选项部分 -->
+                    <div class="mt-6">
+                        <!-- 下载路径选择 -->
+                        <div class="mb-4">
+                            <label class="block text-gray-700 font-medium mb-2">Save Location:</label>
+                            <div class="flex gap-2">
+                                <select id="save-path-select" 
+                                        class="flex-1 px-4 py-2 border rounded-lg focus:outline-none focus:border-blue-500 bg-gray-50">
+                                    <option value="">Select download location...</option>
+                                </select>
+                                <button onclick="openFolderPicker()"
+                                        class="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors">
+                                    Browse
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- 格式类型选择 -->
+                        <div class="mb-4">
+                            <label class="block text-gray-700 font-medium mb-2">Format Type:</label>
+                            <select id="format-type-select" 
+                                    onchange="updateFormatOptions()"
+                                    class="w-full px-4 py-2 border rounded-lg focus:outline-none focus:border-blue-500 bg-gray-50">
+                                <option value="combined">Video + Audio</option>
+                                <option value="video">Video Only</option>
+                                <option value="audio">Audio Only</option>
+                            </select>
+                        </div>
+
+                        <!-- 可用格式 -->
+                        <div class="mb-4">
+                            <label class="block text-gray-700 font-medium mb-2">Available Formats:</label>
+                            <div class="grid grid-cols-2 md:grid-cols-3 gap-2" id="format-options">
+                                <!-- 格式选项将在这里动态生成 -->
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 下载按钮和进度 -->
+                    <div class="space-y-2">
+                        <button onclick="downloadVideo()" 
+                                id="download-btn"
+                                disabled
+                                class="w-full px-6 py-3 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-lg font-semibold">
+                            Download Video
+                        </button>
+                        
+                        <!-- 下载进度 -->
+                        <div id="progress-container" class="hidden">
+                            <div class="w-full bg-gray-200 rounded-full h-2">
+                                <div id="progress-bar" class="bg-blue-600 h-2 rounded-full transition-all duration-300" style="width: 0%"></div>
+                            </div>
+                            <div class="flex justify-between mt-1 text-sm text-gray-600">
+                                <div class="flex items-center gap-2">
+                                    <span id="progress-text">0%</span>
+                                    <span id="progress-speed"></span>
+                                </div>
+                                <span id="progress-eta"></span>
+                            </div>
+                        </div>
+
+                        <!-- 下载完成提示 -->
+                        <div id="download-complete" class="hidden">
+                            <div class="bg-green-100 border border-green-400 text-green-700 px-4 py-3 rounded-lg">
+                                <div class="flex justify-between items-center">
+                                    <div>
+                                        <strong class="font-bold">Success!</strong>
+                                        <span class="block sm:inline"> Download completed successfully.</span>
+                                        <span id="download-path" class="block mt-1 text-sm"></span>
+                                    </div>
+                                    <button onclick="openDownloadFolder()"
+                                            class="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors">
+                                        Open Folder
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 免责声明 -->
+    <footer class="text-center py-4 text-gray-500 text-sm">
+        <p>视频归相关网站及作者所有，本站不存储任何视频及图片</p>
+    </footer>
+
+    <!-- 成功提示弹窗 -->
+    <div id="success-modal" class="fixed inset-0 bg-black bg-opacity-50 hidden flex items-center justify-center">
+        <div class="bg-white rounded-lg p-6 max-w-md w-full mx-4">
+            <div class="flex items-center mb-4">
+                <svg class="w-6 h-6 text-green-500 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                </svg>
+                <h3 class="text-lg font-semibold text-gray-900">Download Completed!</h3>
+            </div>
+            <p class="text-gray-600 mb-4">Your video has been downloaded successfully.</p>
+            <div class="text-sm text-gray-500 mb-4">
+                <span id="modal-download-path"></span>
+            </div>
+            <div class="flex justify-end gap-2">
+                <button onclick="openDownloadFolder()" class="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors">
+                    Open Folder
+                </button>
+                <button onclick="closeSuccessModal()" class="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors">
+                    Close
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 添加关闭弹窗函数
+        function closeSuccessModal() {
+            document.getElementById('success-modal').classList.add('hidden');
+        }
+
+        // WebSocket 连接管理
+        let ws = null;
+        let wsReconnectAttempts = 0;
+        const MAX_RECONNECT_ATTEMPTS = 5;
+
+        function connectWebSocket() {
+            ws = new WebSocket(`ws://${window.location.host}/ws`);
+            
+            ws.onopen = function() {
+                console.log('WebSocket connection established');
+                wsReconnectAttempts = 0;
+            };
+            
+            ws.onerror = function(error) {
+                console.error('WebSocket error:', error);
+            };
+            
+            ws.onclose = function() {
+                console.log('WebSocket connection closed');
+                if (wsReconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+                    wsReconnectAttempts++;
+                    console.log(`Attempting to reconnect (${wsReconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`);
+                    setTimeout(connectWebSocket, 1000);
+                }
+            };
+            
+            ws.onmessage = function(event) {
+                try {
+                    const data = JSON.parse(event.data);
+                    console.log('Received message:', data);
+                    
+                    if (data.status === 'downloading') {
+                        // 显示进度容器
+                        const progressContainer = document.getElementById('progress-container');
+                        const progressBar = document.getElementById('progress-bar');
+                        const progressText = document.getElementById('progress-text');
+                        const progressSpeed = document.getElementById('progress-speed');
+                        const progressEta = document.getElementById('progress-eta');
+                        
+                        progressContainer.classList.remove('hidden');
+                        document.getElementById('download-complete').classList.add('hidden');
+                        
+                        // 更新进度
+                        const percent = data.percent.toFixed(1);
+                        progressBar.style.width = `${percent}%`;
+                        progressText.textContent = `${percent}%`;
+                        
+                        // 更新速度
+                        const speed = humanizeBytes(data.speed) + '/s';
+                        progressSpeed.textContent = speed;
+                        
+                        // 更新预计剩余时间
+                        const eta = humanizeSeconds(data.eta);
+                        progressEta.textContent = `Estimated time remaining: ${eta}`;
+                    }
+                    else if (data.status === 'completed') {
+                        // 隐藏进度条
+                        document.getElementById('progress-container').classList.add('hidden');
+                        
+                        // 显示成功弹窗
+                        const successModal = document.getElementById('success-modal');
+                        const modalPathSpan = document.getElementById('modal-download-path');
+                        modalPathSpan.textContent = `Saved to: ${data.path}`;
+                        successModal.classList.remove('hidden');
+                        
+                        // 重置下载按钮
+                        const downloadBtn = document.getElementById('download-btn');
+                        downloadBtn.disabled = false;
+                        downloadBtn.textContent = 'Download Video';
+                    }
+                    else if (data.status === 'error') {
+                        // 处理错误
+                        document.getElementById('progress-container').classList.add('hidden');
+                        document.getElementById('download-complete').classList.add('hidden');
+                        showStatus('Download error: ' + data.error, 'error');
+                    }
+                } catch (error) {
+                    console.error('Error processing WebSocket message:', error);
+                    showStatus('Error processing download status', 'error');
+                }
+            };
+        }
+
+        // 页面加载时连接WebSocket
+        window.addEventListener('load', connectWebSocket);
+
+        let selectedFormatId = null;
+        let videoFormats = null;  // 存储所有格式信息
+
+        // 状态显示函数
+        function showStatus(message, type = 'info') {
+            const statusDiv = document.getElementById('status-message');
+            statusDiv.textContent = message;
+            statusDiv.className = `mb-4 p-4 rounded-lg ${type === 'error' ? 'bg-red-100 text-red-700' : 'bg-blue-100 text-blue-700'}`;
+            statusDiv.classList.remove('hidden');
+        }
+
+        function hideStatus() {
+            document.getElementById('status-message').classList.add('hidden');
+        }
+
+        // 格式化函数
+        function humanizeBytes(bytes) {
+            const units = ['B', 'KB', 'MB', 'GB'];
+            let unit = 0;
+            let size = bytes;
+            
+            while (size >= 1024 && unit < units.length - 1) {
+                size /= 1024;
+                unit++;
+            }
+            
+            return `${size.toFixed(1)} ${units[unit]}`;
+        }
+
+        function humanizeSeconds(seconds) {
+            if (seconds < 60) return `${seconds}s`;
+            const minutes = Math.floor(seconds / 60);
+            seconds = Math.floor(seconds % 60);
+            if (minutes < 60) return `${minutes}m ${seconds}s`;
+            const hours = Math.floor(minutes / 60);
+            minutes = minutes % 60;
+            return `${hours}h ${minutes}m ${seconds}s`;
+        }
+
+        // 更新格式选项
+        function updateFormatOptions() {
+            if (!videoFormats) return;
+            
+            const formatType = document.getElementById('format-type-select').value;
+            const formatOptions = document.getElementById('format-options');
+            const formats = videoFormats[formatType] || [];
+            
+            formatOptions.innerHTML = '';
+            selectedFormatId = null;
+            document.getElementById('download-btn').disabled = true;
+            
+            formats.forEach(format => {
+                const formatDiv = document.createElement('div');
+                formatDiv.className = 'p-3 border rounded-lg hover:bg-gray-50 cursor-pointer transition-colors';
+                formatDiv.onclick = () => selectFormat(formatDiv, format.format_id);
+                
+                // 确定格式类型标签
+                let typeLabel = '';
+                // 根据当前选择的格式类型显示对应标签
+                switch(formatType) {
+                    case 'combined':
+                        typeLabel = '<span class="text-xs bg-blue-100 text-blue-800 px-2 py-0.5 rounded">Video + Audio</span>';
+                        break;
+                    case 'video':
+                        typeLabel = '<span class="text-xs bg-purple-100 text-purple-800 px-2 py-0.5 rounded">Video Only</span>';
+                        break;
+                    case 'audio':
+                        typeLabel = '<span class="text-xs bg-green-100 text-green-800 px-2 py-0.5 rounded">Audio Only</span>';
+                        break;
+                }
+                
+                formatDiv.innerHTML = `
+                    <div class="flex items-center justify-between">
+                        <div class="flex-1">
+                            <div class="flex items-center gap-2">
+                                <span class="font-semibold text-gray-800">
+                                    ${format.quality_label}
+                                    ${format.fps !== 'N/A' ? ` • ${format.fps}fps` : ''}
+                                </span>
+                                ${typeLabel}
+                            </div>
+                            <div class="text-xs text-gray-500 mt-1">
+                                <div class="flex items-center gap-2">
+                                    ${format.vcodec !== 'N/A' ? `Video: ${format.vcodec}` : ''}
+                                    ${format.vcodec !== 'N/A' && format.acodec !== 'N/A' ? ' • ' : ''}
+                                    ${format.acodec !== 'N/A' ? `Audio: ${format.acodec}` : ''}
+                                </div>
+                            </div>
+                        </div>
+                        ${format.filesize !== 'N/A' ? 
+                            `<span class="text-sm font-medium bg-gray-100 px-2 py-1 rounded">
+                                ${format.filesize}
+                            </span>`
+                            : ''
+                        }
+                    </div>
+                `;
+                
+                formatOptions.appendChild(formatDiv);
+            });
+        }
+
+        // 格式选择函数
+        function selectFormat(element, formatId) {
+            document.querySelectorAll('#format-options > div').forEach(div => {
+                div.classList.remove('bg-blue-50', 'border-blue-500', 'ring-2', 'ring-blue-500');
+            });
+            
+            element.classList.add('bg-blue-50', 'border-blue-500', 'ring-2', 'ring-blue-500');
+            selectedFormatId = formatId;
+            
+            document.getElementById('download-btn').disabled = false;
+        }
+
+        // 视频信息获取函数
+        async function getVideoInfo() {
+            const urlInput = document.getElementById('url-input');
+            const infoBtn = document.getElementById('info-btn');
+            const videoInfo = document.getElementById('video-info');
+            const downloadBtn = document.getElementById('download-btn');
+            
+            if (!urlInput.value) {
+                showStatus('Please enter a YouTube URL', 'error');
+                return;
+            }
+
+            infoBtn.disabled = true;
+            downloadBtn.disabled = true;
+            showStatus('Fetching video information...');
+            
+            try {
+                const response = await fetch('/info', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        url: urlInput.value
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(await response.text());
+                }
+                
+                const data = await response.json();
+                videoFormats = data.formats;
+                
+                // 更新视频信息
+                document.getElementById('video-thumbnail').src = data.thumbnail;
+                document.getElementById('video-title').textContent = data.title;
+                document.getElementById('video-duration').textContent = data.duration;
+                // 获取最高分辨率
+                let maxHeight = 0;
+                let maxResolution = '';
+                Object.values(videoFormats).flat().forEach(format => {
+                    if (format.height && format.height > maxHeight) {
+                        maxHeight = format.height;
+                        maxResolution = `${format.width}x${format.height}`;
+                    }
+                });
+                document.getElementById('video-resolution').textContent = maxResolution;
+                // 添加视频描述
+                document.getElementById('video-description').textContent = data.description || 'No description available';
+                
+                videoInfo.classList.remove('hidden');
+                updateFormatOptions();
+                
+                hideStatus();
+                
+            } catch (error) {
+                console.error('Error:', error);
+                showStatus(error.message || 'Failed to get video info', 'error');
+                videoInfo.classList.add('hidden');
+            } finally {
+                infoBtn.disabled = false;
+            }
+        }
+
+        // 下载函数
+        async function downloadVideo() {
+            const urlInput = document.getElementById('url-input');
+            const savePathSelect = document.getElementById('save-path-select');
+            const downloadBtn = document.getElementById('download-btn');
+            
+            if (!urlInput.value || !selectedFormatId) {
+                showStatus('Please enter URL and select format', 'error');
+                return;
+            }
+            
+            if (!savePathSelect.value) {
+                showStatus('Please select save location', 'error');
+                return;
+            }
+            
+            try {
+                downloadBtn.disabled = true;
+                downloadBtn.textContent = 'Starting Download...';
+                
+                const response = await fetch('/download', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        url: urlInput.value,
+                        format_id: selectedFormatId,
+                        save_path: savePathSelect.value
+                    })
+                });
+                
+                if (!response.ok) {
+                    const error = await response.text();
+                    throw new Error(error);
+                }
+                
+                showStatus('Download started successfully', 'info');
+                
+            } catch (error) {
+                showStatus(error.message, 'error');
+                downloadBtn.disabled = false;
+                downloadBtn.textContent = 'Download Video';
+            }
+        }
+
+        // 页面加载时初始化下载路径
+        window.addEventListener('load', async () => {
+            try {
+                const response = await fetch('/download-paths');
+                const data = await response.json();
+                
+                const pathSelect = document.getElementById('save-path-select');
+                data.paths.forEach(path => {
+                    const option = document.createElement('option');
+                    option.value = path;
+                    option.textContent = path;
+                    pathSelect.appendChild(option);
+                });
+            } catch (error) {
+                console.error('Failed to load download paths:', error);
+            }
+        });
+
+        async function openFolderPicker() {
+            try {
+                const response = await fetch('/select-folder', {
+                    method: 'POST'
+                });
+                const data = await response.json();
+                
+                if (data.path) {
+                    const pathSelect = document.getElementById('save-path-select');
+                    
+                    // Check if path already exists in options
+                    let exists = false;
+                    for (let option of pathSelect.options) {
+                        if (option.value === data.path) {
+                            exists = true;
+                            option.selected = true;
+                            break;
+                        }
+                    }
+                    
+                    // If path doesn't exist, add it
+                    if (!exists) {
+                        const option = document.createElement('option');
+                        option.value = data.path;
+                        option.textContent = data.path;
+                        option.selected = true;
+                        pathSelect.appendChild(option);
+                    }
+                }
+            } catch (error) {
+                showStatus('Failed to select folder: ' + error.message, 'error');
+            }
+        }
+
+        // 添加打开下载文件夹的函数
+        async function openDownloadFolder() {
+            try {
+                const response = await fetch('/open-folder', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        path: document.getElementById('download-path').textContent.replace('Saved to: ', '')
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error('Failed to open folder');
+                }
+            } catch (error) {
+                showStatus('Failed to open folder: ' + error.message, 'error');
+            }
+        }
+    </script>
+</body>
+</html>
