@@ -115,7 +115,7 @@
                         <!-- 可用格式 -->
                         <div class="mb-4">
                             <label class="block text-gray-700 font-medium mb-2">Available Formats:</label>
-                            <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2" id="format-options">
+                            <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-2" id="format-options">
                                 <!-- 格式选项将在这里动态生成 -->
                             </div>
                         </div>
@@ -132,8 +132,19 @@
                         
                         <!-- 下载进度 -->
                         <div id="progress-container" class="hidden">
-                            <div class="w-full bg-gray-200 rounded-full h-2">
-                                <div id="progress-bar" class="bg-blue-600 h-2 rounded-full transition-all duration-300" style="width: 0%"></div>
+                            <div class="flex items-center gap-2 mb-2">
+                                <div class="flex-1">
+                                    <div class="w-full bg-gray-200 rounded-full h-2">
+                                        <div id="progress-bar" class="bg-blue-600 h-2 rounded-full transition-all duration-300" style="width: 0%"></div>
+                                    </div>
+                                </div>
+                                <!-- 添加暂停/继续按钮 -->
+                                <button id="pause-btn" 
+                                        onclick="toggleDownload()"
+                                        class="px-3 py-1 text-sm rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 transition-colors">
+                                    <span class="pause-icon">⏸️</span>
+                                    <span class="resume-icon hidden">▶️</span>
+                                </button>
                             </div>
                             <div class="flex justify-between mt-1 text-sm text-gray-600">
                                 <div class="flex items-center gap-2">
@@ -171,8 +182,8 @@
         <p>本站仅供学习参考，视频归相关网站及作者所有，本站不存储任何视频及图片</p>
     </footer>
 
-    <!-- 成功提示弹窗 -->
-    <div id="success-modal" class="fixed inset-0 bg-black bg-opacity-50 hidden flex items-center justify-center">
+    <!-- 修改成功提示弹窗 -->
+    <div id="success-modal" class="fixed inset-0 bg-black bg-opacity-50 hidden flex items-center justify-center z-50">
         <div class="bg-white rounded-lg p-6 max-w-md w-full mx-4">
             <div class="flex items-center mb-4">
                 <svg class="w-6 h-6 text-green-500 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -182,13 +193,34 @@
             </div>
             <p class="text-gray-600 mb-4">Your video has been downloaded successfully.</p>
             <div class="text-sm text-gray-500 mb-4">
-                <span id="modal-download-path"></span>
+                <div class="flex items-center gap-2">
+                    <span id="modal-download-path" class="truncate"></span>
+                    <button onclick="openDownloadFolder()" 
+                            class="flex-shrink-0 px-3 py-1 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 transition-colors">
+                        Open Folder
+                    </button>
+                </div>
             </div>
-            <div class="flex justify-end gap-2">
-                <button onclick="openDownloadFolder()" class="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors">
-                    Open Folder
-                </button>
+            <div class="flex justify-end">
                 <button onclick="closeSuccessModal()" class="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors">
+                    Close
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 添加错误提示弹窗 -->
+    <div id="error-modal" class="fixed inset-0 bg-black bg-opacity-50 hidden flex items-center justify-center z-50">
+        <div class="bg-white rounded-lg p-6 max-w-md w-full mx-4">
+            <div class="flex items-center mb-4">
+                <svg class="w-6 h-6 text-red-500 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                </svg>
+                <h3 class="text-lg font-semibold text-gray-900">Download Failed</h3>
+            </div>
+            <p id="error-message" class="text-gray-600 mb-4"></p>
+            <div class="flex justify-end">
+                <button onclick="closeErrorModal()" class="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors">
                     Close
                 </button>
             </div>
@@ -207,81 +239,28 @@
         const MAX_RECONNECT_ATTEMPTS = 5;
 
         function connectWebSocket() {
-            ws = new WebSocket(`ws://${window.location.host}/ws`);
-            
-            ws.onopen = function() {
-                console.log('WebSocket connection established');
-                wsReconnectAttempts = 0;
-            };
-            
-            ws.onerror = function(error) {
-                console.error('WebSocket error:', error);
-            };
-            
-            ws.onclose = function() {
-                console.log('WebSocket connection closed');
-                if (wsReconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
-                    wsReconnectAttempts++;
-                    console.log(`Attempting to reconnect (${wsReconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`);
+            try {
+                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                const ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+                
+                ws.onopen = () => {
+                    console.log('WebSocket connected');
+                };
+                
+                ws.onerror = (error) => {
+                    console.error('WebSocket error:', error);
+                };
+                
+                ws.onclose = () => {
+                    console.log('WebSocket closed, attempting to reconnect...');
                     setTimeout(connectWebSocket, 1000);
-                }
-            };
-            
-            ws.onmessage = function(event) {
-                try {
-                    const data = JSON.parse(event.data);
-                    console.log('Received message:', data);
-                    
-                    if (data.status === 'downloading') {
-                        // 显示进度容器
-                        const progressContainer = document.getElementById('progress-container');
-                        const progressBar = document.getElementById('progress-bar');
-                        const progressText = document.getElementById('progress-text');
-                        const progressSpeed = document.getElementById('progress-speed');
-                        const progressEta = document.getElementById('progress-eta');
-                        
-                        progressContainer.classList.remove('hidden');
-                        document.getElementById('download-complete').classList.add('hidden');
-                        
-                        // 更新进度
-                        const percent = data.percent.toFixed(1);
-                        progressBar.style.width = `${percent}%`;
-                        progressText.textContent = `${percent}%`;
-                        
-                        // 更新速度
-                        const speed = humanizeBytes(data.speed) + '/s';
-                        progressSpeed.textContent = speed;
-                        
-                        // 更新预计剩余时间
-                        const eta = humanizeSeconds(data.eta);
-                        progressEta.textContent = `Estimated time remaining: ${eta}`;
-                    }
-                    else if (data.status === 'completed') {
-                        // 隐藏进度条
-                        document.getElementById('progress-container').classList.add('hidden');
-                        
-                        // 显示成功弹窗
-                        const successModal = document.getElementById('success-modal');
-                        const modalPathSpan = document.getElementById('modal-download-path');
-                        modalPathSpan.textContent = `Saved to: ${data.path}`;
-                        successModal.classList.remove('hidden');
-                        
-                        // 重置下载按钮
-                        const downloadBtn = document.getElementById('download-btn');
-                        downloadBtn.disabled = false;
-                        downloadBtn.textContent = 'Download Video';
-                    }
-                    else if (data.status === 'error') {
-                        // 处理错误
-                        document.getElementById('progress-container').classList.add('hidden');
-                        document.getElementById('download-complete').classList.add('hidden');
-                        showStatus('Download error: ' + data.error, 'error');
-                    }
-                } catch (error) {
-                    console.error('Error processing WebSocket message:', error);
-                    showStatus('Error processing download status', 'error');
-                }
-            };
+                };
+                
+                ws.onmessage = handleWebSocketMessage;
+            } catch (error) {
+                console.error('Failed to connect WebSocket:', error);
+                setTimeout(connectWebSocket, 1000);
+            }
         }
 
         // 页面加载时连接WebSocket
@@ -346,21 +325,20 @@
                 
                 formatDiv.innerHTML = `
                     <div class="flex flex-col h-full">
-                        <div class="flex items-center gap-1 mb-1">
-                            <span class="font-medium text-gray-800 truncate">
+                        <div class="flex items-start gap-1 mb-1">
+                            <span class="font-medium text-gray-800 break-words">
                                 ${format.quality_label}
                             </span>
                         </div>
                         <div class="text-xs text-gray-500">
-                            <div class="flex items-center gap-1 truncate">
-                                ${format.vcodec !== 'N/A' ? `<span>Video: ${format.vcodec}</span>` : ''}
-                                ${format.vcodec !== 'N/A' && format.acodec !== 'N/A' ? '<span class="mx-1">•</span>' : ''}
-                                ${format.acodec !== 'N/A' ? `<span>Audio: ${format.acodec}</span>` : ''}
+                            <div class="flex flex-wrap items-center gap-1">
+                                ${format.vcodec !== 'N/A' ? `<span class="break-words">Video: ${format.vcodec}</span>` : ''}
+                                ${format.acodec !== 'N/A' ? `<span class="break-words">Audio: ${format.acodec}</span>` : ''}
                             </div>
                         </div>
                         ${format.filesize !== 'N/A' ? 
-                            `<div class="text-xs text-right mt-1">
-                                <span class="bg-gray-100 px-1.5 py-0.5 rounded">
+                            `<div class="text-xs mt-1">
+                                <span class="bg-gray-100 px-1.5 py-0.5 rounded break-words">
                                     ${format.filesize}
                                 </span>
                             </div>`
@@ -469,11 +447,19 @@
             }
         }
 
-        // 下载函数
+        // 添加全局变量存储当前下载ID
+        let currentDownloadId = null;
+
+        // 修改下载函数，保存download_id
         async function downloadVideo() {
             const urlInput = document.getElementById('url-input');
             const savePathSelect = document.getElementById('save-path-select');
             const downloadBtn = document.getElementById('download-btn');
+            const progressContainer = document.getElementById('progress-container');
+            const progressBar = document.getElementById('progress-bar');
+            const progressText = document.getElementById('progress-text');
+            const progressSpeed = document.getElementById('progress-speed');
+            const progressEta = document.getElementById('progress-eta');
             
             if (!urlInput.value || !selectedFormatId) {
                 showStatus('Please enter URL and select format', 'error');
@@ -486,6 +472,23 @@
             }
             
             try {
+                // 生成下载ID
+                currentDownloadId = `${urlInput.value}_${savePathSelect.value}`;
+                
+                // 禁用所有相关按钮和输入
+                downloadBtn.disabled = true;
+                urlInput.disabled = true;
+                savePathSelect.disabled = true;
+                document.getElementById('info-btn').disabled = true;
+                document.getElementById('format-type-select').disabled = true;
+                
+                // 重置并显示进度条
+                progressBar.style.width = '0%';
+                progressText.textContent = '0%';
+                progressSpeed.textContent = '';
+                progressEta.textContent = '';
+                progressContainer.classList.remove('hidden');
+                
                 const csrfToken = document.getElementById('csrf_token').value;
                 const response = await fetch('/download', {
                     method: 'POST',
@@ -496,21 +499,140 @@
                     body: JSON.stringify({
                         url: urlInput.value,
                         format_id: selectedFormatId,
-                        save_path: savePathSelect.value
+                        save_path: savePathSelect.value,
+                        download_id: currentDownloadId
                     })
                 });
                 
                 if (!response.ok) {
-                    const error = await response.text();
-                    throw new Error(error);
+                    const errorText = await response.text();
+                    throw new Error(errorText || 'Download request failed');
                 }
                 
-                showStatus('Download started successfully', 'info');
+            } catch (error) {
+                currentDownloadId = null;
+                console.error('Download error:', error);
+                showErrorModal(error.message);
+                resetDownloadState();
+            }
+        }
+
+        // 修改暂停/继续函数
+        async function toggleDownload() {
+            if (!currentDownloadId) {
+                showStatus('No active download to pause/resume', 'error');
+                return;
+            }
+            
+            const pauseBtn = document.getElementById('pause-btn');
+            const pauseIcon = pauseBtn.querySelector('.pause-icon');
+            const resumeIcon = pauseBtn.querySelector('.resume-icon');
+            
+            try {
+                const response = await fetch('/toggle-download', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': document.getElementById('csrf_token').value
+                    },
+                    body: JSON.stringify({
+                        action: isDownloadPaused ? 'resume' : 'pause',
+                        download_id: currentDownloadId
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error('Failed to toggle download');
+                }
+                
+                isDownloadPaused = !isDownloadPaused;
+                
+                // 更新按钮状态
+                if (isDownloadPaused) {
+                    pauseIcon.classList.add('hidden');
+                    resumeIcon.classList.remove('hidden');
+                    showStatus('Download paused', 'info');
+                } else {
+                    pauseIcon.classList.remove('hidden');
+                    resumeIcon.classList.add('hidden');
+                    showStatus('Download resumed', 'info');
+                }
                 
             } catch (error) {
-                showStatus(error.message, 'error');
-                downloadBtn.disabled = false;
-                downloadBtn.textContent = 'Download Video';
+                console.error('Error toggling download:', error);
+                showStatus(`Failed to ${isDownloadPaused ? 'resume' : 'pause'} download`, 'error');
+            }
+        }
+
+        // 修改重置状态函数
+        function resetDownloadState() {
+            const downloadBtn = document.getElementById('download-btn');
+            const urlInput = document.getElementById('url-input');
+            const savePathSelect = document.getElementById('save-path-select');
+            const progressContainer = document.getElementById('progress-container');
+            
+            // 重新启用所有按钮和输入
+            downloadBtn.disabled = false;
+            urlInput.disabled = false;
+            savePathSelect.disabled = false;
+            document.getElementById('info-btn').disabled = false;
+            document.getElementById('format-type-select').disabled = false;
+            
+            // 隐藏进度条
+            progressContainer.classList.add('hidden');
+            currentDownloadId = null;  // 重置download_id
+            isDownloadPaused = false;  // 重置暂停状态
+        }
+
+        // 修改WebSocket消息处理
+        function handleWebSocketMessage(event) {
+            try {
+                const data = JSON.parse(event.data);
+                console.log('WebSocket message:', data);
+                
+                if (data.download_id && data.download_id !== currentDownloadId) {
+                    return;
+                }
+                
+                switch (data.status) {
+                    case 'completed':
+                        currentDownloadId = null;
+                        isDownloadPaused = false;
+                        // 显示成功弹窗
+                        document.getElementById('modal-download-path').textContent = data.path;
+                        document.getElementById('success-modal').classList.remove('hidden');
+                        resetDownloadState();
+                        break;
+                        
+                    case 'error':
+                        currentDownloadId = null;
+                        isDownloadPaused = false;
+                        showErrorModal(data.error);
+                        resetDownloadState();
+                        break;
+                        
+                    case 'downloading':
+                        if (!isDownloadPaused) {
+                            progressBar.style.width = `${data.percent}%`;
+                            progressText.textContent = `${data.percent.toFixed(1)}%`;
+                            progressSpeed.textContent = `${(data.speed/1024/1024).toFixed(1)} MB/s`;
+                            progressEta.textContent = `ETA: ${humanizeSeconds(data.eta)}`;
+                        }
+                        break;
+                        
+                    case 'paused':
+                        progressSpeed.textContent = 'Paused';
+                        progressEta.textContent = '';
+                        break;
+                        
+                    case 'resumed':
+                        showStatus('Download resumed', 'info');
+                        break;
+                }
+            } catch (error) {
+                console.error('Error processing WebSocket message:', error);
+                showErrorModal('Error processing download status');
+                resetDownloadState();
             }
         }
 
@@ -571,18 +693,18 @@
             }
         }
 
-        // 添加打开下载文件夹的函数
+        // 修改打开文件夹函数
         async function openDownloadFolder() {
             try {
-                const csrfToken = document.getElementById('csrf_token').value;
+                const downloadPath = document.getElementById('modal-download-path').textContent;
                 const response = await fetch('/open-folder', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                        'X-CSRFToken': csrfToken
+                        'X-CSRFToken': document.getElementById('csrf_token').value
                     },
                     body: JSON.stringify({
-                        path: document.getElementById('download-path').textContent.replace('Saved to: ', '')
+                        path: downloadPath
                     })
                 });
                 
@@ -590,7 +712,7 @@
                     throw new Error('Failed to open folder');
                 }
             } catch (error) {
-                showStatus('Failed to open folder: ' + error.message, 'error');
+                showErrorModal(`Failed to open folder: ${error.message}`);
             }
         }
 
@@ -607,6 +729,18 @@
                 this.setCustomValidity('');
             }
         });
+
+        let isDownloadPaused = false;
+
+        // 添加错误弹窗函数
+        function showErrorModal(message) {
+            document.getElementById('error-message').textContent = message;
+            document.getElementById('error-modal').classList.remove('hidden');
+        }
+
+        function closeErrorModal() {
+            document.getElementById('error-modal').classList.add('hidden');
+        }
     </script>
 </body>
 </html>

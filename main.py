@@ -14,6 +14,7 @@ from tkinter import filedialog
 import tkinter as tk
 import subprocess
 import platform
+from typing import List
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -50,23 +51,83 @@ DEFAULT_DOWNLOAD_PATHS = [
 
 class ConnectionManager:
     def __init__(self):
-        self.active_connections = []
+        self.active_connections: List[WebSocket] = []
+        self._lock = asyncio.Lock()
 
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
-        self.active_connections.append(websocket)
+        async with self._lock:
+            self.active_connections.append(websocket)
+        print(f"WebSocket client connected. Total connections: {len(self.active_connections)}")
 
-    def disconnect(self, websocket: WebSocket):
-        self.active_connections.remove(websocket)
+    async def disconnect(self, websocket: WebSocket):
+        async with self._lock:
+            if websocket in self.active_connections:
+                self.active_connections.remove(websocket)
+        print(f"WebSocket client disconnected. Total connections: {len(self.active_connections)}")
+
+    async def send_personal_message(self, message: str, websocket: WebSocket):
+        try:
+            await websocket.send_text(message)
+        except Exception as e:
+            print(f"Error sending message to WebSocket: {e}")
+            await self.disconnect(websocket)
 
     async def broadcast(self, message: str):
-        for connection in self.active_connections:
-            try:
-                await connection.send_text(message)
-            except:
-                pass
+        async with self._lock:
+            disconnected = []
+            for connection in self.active_connections:
+                try:
+                    await connection.send_text(message)
+                except Exception as e:
+                    print(f"Error broadcasting to WebSocket: {e}")
+                    disconnected.append(connection)
+            
+            # 清理断开的连接
+            for conn in disconnected:
+                await self.disconnect(conn)
 
 manager = ConnectionManager()
+
+# 添加下载状态管理
+class DownloadManager:
+    def __init__(self):
+        self._downloads = {}
+        self._lock = asyncio.Lock()
+    
+    async def add_download(self, download_id, task):
+        async with self._lock:
+            self._downloads[download_id] = {
+                'task': task,
+                'paused': False,
+                'pause_event': asyncio.Event()
+            }
+            # 设置事件为set状态，允许下载进行
+            self._downloads[download_id]['pause_event'].set()
+    
+    async def pause_download(self, download_id):
+        async with self._lock:
+            if download_id in self._downloads:
+                self._downloads[download_id]['paused'] = True
+                self._downloads[download_id]['pause_event'].clear()
+                return True
+        return False
+    
+    async def resume_download(self, download_id):
+        async with self._lock:
+            if download_id in self._downloads:
+                self._downloads[download_id]['paused'] = False
+                self._downloads[download_id]['pause_event'].set()
+                return True
+        return False
+    
+    async def get_download_status(self, download_id):
+        async with self._lock:
+            if download_id in self._downloads:
+                return self._downloads[download_id]['paused']
+        return None
+
+download_manager = DownloadManager()
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -230,124 +291,121 @@ async def download_video(request: Request):
         url = data.get('url')
         format_id = data.get('format_id')
         save_path = data.get('save_path')
+        download_id = data.get('download_id')
         
-        if not all([url, format_id, save_path]):
+        if not all([url, format_id, save_path, download_id]):
             raise HTTPException(status_code=400, detail="Missing required parameters")
-            
+        
+        print(f"Starting download: URL={url}, Format={format_id}, Path={save_path}")
+        
         ydl_opts = {
-            'format': format_id if '+' not in format_id else f'{format_id.split("+")[0]}+bestaudio',
-            'merge_output_format': 'mp4',  # 强制合并为mp4格式
+            'format': format_id,
+            'merge_output_format': 'mp4',
             'postprocessors': [{
                 'key': 'FFmpegVideoConvertor',
                 'preferedformat': 'mp4',
             }],
-            'progress_hooks': [lambda d: None],
-            'quiet': True,
-            'no_warnings': True,
+            'progress_hooks': [lambda d: print(f"Download progress: {d}")],
+            'quiet': False,
+            'no_warnings': False,
             'outtmpl': os.path.join(save_path, '%(title)s.%(ext)s'),
-            'ffmpeg_location': 'ffmpeg',
+            
+            # 分片下载设置
+            'fragment_retries': 10,        # 分片重试次数
+            'retries': 10,                 # 整体重试次数
+            'concurrent_fragment_downloads': 8,  # 并发下载数
+            'buffersize': 1024,            # 缓冲区大小
+            'http_chunk_size': 10485760,   # 分片大小(10MB)
+            
+            # 网络设置
+            'socket_timeout': 30,          # 超时时间
+            'extractor_retries': 5,        # 解析重试次数
+            
+            # 额外的请求头
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            },
         }
         
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                # 先获取视频信息
                 info = ydl.extract_info(url, download=False)
-                print(f"Starting download with format {format_id} to {save_path}")
-                asyncio.create_task(download_task(url, ydl_opts, info, save_path))
+                print(f"Video info extracted, starting download task")
+                # 创建下载任务
+                task = asyncio.create_task(download_task(url, ydl_opts, info, save_path, download_id))
+                # 注册下载任务
+                await download_manager.add_download(download_id, task)
                 
                 return JSONResponse({
                     "status": "success",
                     "message": "Download started",
-                    "save_path": save_path
+                    "save_path": save_path,
+                    "download_id": download_id
                 })
                 
         except Exception as e:
-            print(f"Error starting download: {str(e)}")
+            print(f"Error during download: {str(e)}")
             raise HTTPException(status_code=400, detail=str(e))
-        
+            
     except Exception as e:
+        print(f"Unexpected error: {str(e)}")
         raise HTTPException(status_code=400, detail=str(e))
 
-async def download_task(url, ydl_opts, info, save_path):
+async def download_task(url, ydl_opts, info, save_path, download_id):
     try:
-        print(f"Download started with options: {ydl_opts}")
-        
         def progress_hook(d):
-            if d['status'] == 'downloading':
-                try:
-                    total_bytes = d.get('total_bytes', 0)
-                    downloaded_bytes = d.get('downloaded_bytes', 0)
+            try:
+                if d['status'] == 'downloading':
+                    # 检查是否需要暂停
+                    download_info = download_manager._downloads.get(download_id)
+                    if download_info and download_info['paused']:
+                        print(f"Download {download_id} is paused, waiting...")
+                        # 等待恢复信号
+                        asyncio.get_event_loop().run_until_complete(
+                            download_info['pause_event'].wait()
+                        )
+                        print(f"Download {download_id} resumed")
+                    
+                    downloaded = d.get('downloaded_bytes', 0)
+                    total = d.get('total_bytes', 0) or d.get('total_bytes_estimate', 0)
                     speed = d.get('speed', 0)
                     eta = d.get('eta', 0)
+                    filename = os.path.basename(d.get('filename', ''))
                     
-                    if total_bytes > 0:
-                        percent = (downloaded_bytes / total_bytes) * 100
-                    else:
-                        percent = 0
+                    if total > 0:
+                        percent = (downloaded / total) * 100
+                        # 发送进度更新
+                        asyncio.create_task(manager.broadcast(json.dumps({
+                            'status': 'downloading',
+                            'percent': percent,
+                            'speed': speed,
+                            'eta': eta,
+                            'filename': filename,
+                            'download_id': download_id
+                        })))
                         
-                    progress_data = {
-                        'status': 'downloading',
-                        'percent': percent,
-                        'speed': speed,
-                        'eta': eta
-                    }
-                    
-                    print(f"Progress: {percent}%, Speed: {speed}, ETA: {eta}")
-                    # 使用异步循环发送进度信息
-                    loop = asyncio.get_event_loop()
-                    loop.create_task(manager.broadcast(json.dumps(progress_data)))
-                    
-                except Exception as e:
-                    print(f"Error in progress hook: {str(e)}")
-                    print(f"Full error details: {e.__dict__}")
-            
-            elif d['status'] == 'finished':
-                print("Download finished, now converting...")
-                # 发送转换状态
-                loop = asyncio.get_event_loop()
-                loop.create_task(manager.broadcast(json.dumps({
-                    'status': 'converting',
-                    'message': 'Converting video format...'
-                })))
+            except Exception as e:
+                print(f"Error in progress hook: {str(e)}")
         
-        # 添加进度钩子到下载选项
         ydl_opts['progress_hooks'] = [progress_hook]
         
+        # 开始下载
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
         
-        # 获取预期的文件名和路径
-        filename = f"{info['title']}.mp4"
-        filepath = os.path.join(save_path, filename)
-        
-        # 验证文件是否存在和大小
-        if not os.path.exists(filepath):
-            original_filename = f"{info['title']}.{info['ext']}"
-            filepath = os.path.join(save_path, original_filename)
-            if not os.path.exists(filepath):
-                raise Exception(f"Download failed: File not found in {save_path}")
-        
-        filesize = os.path.getsize(filepath)
-        if filesize == 0:
-            raise Exception(f"Download failed: File is empty (0 bytes)")
-        
-        print(f"Download completed: {filepath}")
-        print(f"File size: {filesize} bytes ({humanize.naturalsize(filesize)})")
-        
-        # 发送完成消息
+        # 下载完成通知
         await manager.broadcast(json.dumps({
-            "status": "completed",
-            "title": info["title"],
-            "path": filepath
+            'status': 'completed',
+            'path': save_path,
+            'download_id': download_id
         }))
         
     except Exception as e:
-        print(f"Download error: {str(e)}")
-        print(f"Full error details: {e.__dict__}")
-        # 发送错误消息
+        print(f"Download task error: {str(e)}")
         await manager.broadcast(json.dumps({
-            "status": "error",
-            "error": str(e)
+            'status': 'error',
+            'error': str(e),
+            'download_id': download_id
         }))
 
 @app.get("/videos")
@@ -503,6 +561,28 @@ async def get_video_info(url: str, request: Request):
                 'description': info.get('description', ''),
                 'formats': formats
             }
+            
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/toggle-download")
+async def toggle_download(request: Request):
+    try:
+        data = await request.json()
+        action = data.get('action')
+        download_id = data.get('download_id')
+        
+        if action == 'pause':
+            success = await download_manager.pause_download(download_id)
+        elif action == 'resume':
+            success = await download_manager.resume_download(download_id)
+        else:
+            raise HTTPException(status_code=400, detail="Invalid action")
+            
+        if success:
+            return {"status": "success", "action": action}
+        else:
+            raise HTTPException(status_code=404, detail="Download not found")
             
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
