@@ -98,134 +98,130 @@ async def get_download_paths():
     return {"paths": paths}
 
 @app.get("/video-info")
-async def get_video_info(url: str, request: Request):
+async def get_video_info(url: str):
     print(f"\n=== Video Info Request ===")
     print(f"Requested URL: {url}")
     
     if not url:
         raise HTTPException(status_code=400, detail="URL is required")
     
-    ydl_opts = {
-        'quiet': False,
-        'no_warnings': False,
-        'verbose': True,
-        'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'en-us,en;q=0.5',
-            'Sec-Fetch-Mode': 'navigate',
-        },
-        'format': 'best',
-        'extract_flat': True,
-        'force_generic_extractor': False
-    }
-    
     try:
-        print(f"\nAttempting to fetch video info...")
+        ydl_opts = {
+            'quiet': True,
+            'no_warnings': True,
+            'format': 'bestvideo+bestaudio/best',
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            },
+            'socket_timeout': 30,
+            'retries': 3,
+        }
+        
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             try:
                 info = ydl.extract_info(url, download=False)
-                print("Info extraction successful")
-            except Exception as e:
-                print(f"Error during extraction: {str(e)}")
-                raise HTTPException(status_code=400, detail=f"Failed to extract video info: {str(e)}")
-            
-            if not info:
-                raise HTTPException(status_code=400, detail="No video information found")
-            
-            print("\nProcessing formats...")
-            formats_by_type = {
-                'combined': [],  # video+audio formats
-                'video': [],     # video-only formats
-                'audio': []      # audio-only formats
-            }
-            
-            # 处理所有可用格式
-            for f in info.get('formats', []):
-                # 获取基本信息
-                format_id = f.get('format_id', 'N/A')
-                ext = f.get('ext', 'N/A')
+                if not info:
+                    raise HTTPException(status_code=400, detail="No video information found")
                 
-                # 获取分辨率
-                resolution = f.get('resolution', 'N/A')
-                if resolution == 'N/A':
-                    width = f.get('width', 0)
-                    height = f.get('height', 0)
-                    if width and height:
-                        resolution = f"{width}x{height}"
+                print(f"Successfully retrieved info for video: {info.get('title', 'Unknown')}")
                 
-                # 获取编解码器信息
-                vcodec = f.get('vcodec', 'none')
-                acodec = f.get('acodec', 'none')
+                formats = {'combined': [], 'video': [], 'audio': []}
                 
-                # 获取比特率
-                vbr = f.get('vbr', 0)
-                abr = f.get('abr', 0)
-                tbr = f.get('tbr', 0)
-                
-                # 创建格式对象
-                format_info = {
-                    'format_id': format_id,
-                    'ext': ext,
-                    'resolution': resolution,
-                    'filesize': humanize.naturalsize(f.get('filesize', 0)),
-                    'format_note': f.get('format_note', ''),
-                    'fps': f.get('fps', 'N/A'),
-                    'vcodec': vcodec.split('.')[0] if vcodec != 'none' else 'N/A',
-                    'acodec': acodec.split('.')[0] if acodec != 'none' else 'N/A',
-                    'vbr': f"{int(vbr)}kbps" if vbr else "N/A",
-                    'abr': f"{int(abr)}kbps" if abr else "N/A",
-                    'total_bitrate': f"{int(tbr)}kbps" if tbr else "N/A",
+                # 获取最佳音频流
+                best_audio = None
+                for f in info['formats']:
+                    if f.get('vcodec') == 'none' and f.get('acodec') != 'none':
+                        if not best_audio or (
+                            (f.get('filesize', 0) or 0) > (best_audio.get('filesize', 0) or 0) and 
+                            (f.get('tbr', 0) or 0) > (best_audio.get('tbr', 0) or 0)
+                        ):
+                            best_audio = f
+
+                # 处理所有格式
+                for f in info['formats']:
+                    vcodec = f.get('vcodec', 'none')
+                    acodec = f.get('acodec', 'none')
+                    filesize = f.get('filesize', 0) or f.get('approximate_filesize', 0) or 0
+                    
+                    # 跳过无效格式
+                    if (vcodec == 'none' and acodec == 'none') or filesize == 0:
+                        continue
+                    
+                    # 创建基本格式信息
+                    format_info = {
+                        'format_id': f['format_id'],
+                        'ext': f.get('ext', 'N/A'),
+                        'filesize': humanize.naturalsize(filesize),
+                        'tbr': float(f.get('tbr', 0) or 0),  # 总比特率
+                        'vcodec': vcodec,
+                        'acodec': acodec,
+                        'width': int(f.get('width', 0) or 0),
+                        'height': int(f.get('height', 0) or 0),
+                        'fps': float(f.get('fps', 0) or 0),
+                    }
+                    
+                    # 设置质量标签
+                    if format_info['height']:
+                        quality = f"{format_info['height']}p"
+                        if format_info['fps'] > 30:
+                            quality += f" {int(format_info['fps'])}fps"
+                        format_info['quality_label'] = quality
+                    else:
+                        format_info['quality_label'] = f.get('format_note', 'N/A')
+
+                    # 分类并组合格式
+                    if vcodec != 'none' and acodec != 'none':
+                        formats['combined'].append(format_info)
+                    elif vcodec != 'none':
+                        if best_audio:
+                            format_info['format_id'] = f"{f['format_id']}+{best_audio['format_id']}"
+                            format_info['acodec'] = best_audio['acodec']
+                            # 确保复制一份，避免引用问题
+                            combined_format = format_info.copy()
+                            # 更新合并后的文件大小估计
+                            combined_format['filesize'] = humanize.naturalsize(filesize + (best_audio.get('filesize', 0) or 0))
+                            formats['combined'].append(combined_format)
+                        formats['video'].append(format_info)
+                    elif acodec != 'none':
+                        formats['audio'].append(format_info)
+
+                # 安全的排序函数
+                def safe_sort_key(x):
+                    return (
+                        int(x.get('height', 0) or 0),  # 首先按分辨率排序
+                        float(x.get('fps', 0) or 0),   # 然后按帧率排序
+                        float(x.get('tbr', 0) or 0)    # 最后按比特率排序
+                    )
+
+                # 按质量排序
+                for format_type in formats:
+                    formats[format_type].sort(
+                        key=safe_sort_key,
+                        reverse=True  # 降序排序
+                    )
+
+                response_data = {
+                    'title': info.get('title', 'Unknown Title'),
+                    'duration': str(timedelta(seconds=int(info.get('duration', 0) or 0))),
+                    'thumbnail': info.get('thumbnail', ''),
+                    'description': info.get('description', ''),
+                    'formats': formats
                 }
                 
-                # 根据类型分类
-                if vcodec != 'none' and acodec != 'none':
-                    format_info['quality_label'] = f"{resolution} ({format_info['total_bitrate']})"
-                    formats_by_type['combined'].append(format_info)
-                elif vcodec != 'none':
-                    format_info['quality_label'] = f"{resolution} ({format_info['vbr']})"
-                    formats_by_type['video'].append(format_info)
-                elif acodec != 'none':
-                    format_info['quality_label'] = f"Audio {format_info['abr']}"
-                    formats_by_type['audio'].append(format_info)
-            
-            # 对每种类型的格式进行排序
-            for format_type in formats_by_type:
-                if format_type in ['combined', 'video']:
-                    # 按分辨率和比特率排序
-                    formats_by_type[format_type].sort(key=lambda x: (
-                        -int(x['resolution'].split('x')[0]) if 'x' in x['resolution'] else 0,
-                        -int(x.get('total_bitrate', '0kbps').replace('kbps', '')) if 'kbps' in x.get('total_bitrate', '') else 0
-                    ))
-                else:
-                    # 音频按比特率排序
-                    formats_by_type[format_type].sort(key=lambda x: 
-                        -int(x.get('abr', '0kbps').replace('kbps', '')) if 'kbps' in x.get('abr', '') else 0
-                    )
-            
-            if all(len(formats) == 0 for formats in formats_by_type.values()):
-                raise HTTPException(status_code=400, detail="No suitable video formats found")
-            
-            response_data = {
-                "title": info.get('title', 'Unknown Title'),
-                "duration": str(timedelta(seconds=info.get('duration', 0))),
-                "thumbnail": info.get('thumbnail', ''),
-                "channel": info.get('channel', 'Unknown Channel'),
-                "formats": formats_by_type
-            }
-            
-            print(f"\nSuccess! Video title: {response_data['title']}")
-            print(f"Found formats: Combined: {len(formats_by_type['combined'])}, "
-                  f"Video: {len(formats_by_type['video'])}, "
-                  f"Audio: {len(formats_by_type['audio'])}")
-            return response_data
-            
+                return response_data
+                
+            except yt_dlp.utils.DownloadError as e:
+                print(f"YouTube-DL error: {str(e)}")
+                raise HTTPException(status_code=400, detail=f"Failed to extract video info: {str(e)}")
+            except Exception as e:
+                print(f"Unexpected error: {str(e)}")
+                import traceback
+                traceback.print_exc()
+                raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
+                
     except Exception as e:
-        print(f"\nUnexpected error: {str(e)}")
-        print("Full error details:", e)
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
+        print(f"Error processing request: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/download")
 async def download_video(request: Request):
@@ -401,7 +397,7 @@ async def open_folder(request: Request):
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/info")
-async def get_video_info(request: Request):
+async def get_video_info(url: str, request: Request):
     try:
         data = await request.json()
         url = data.get('url')

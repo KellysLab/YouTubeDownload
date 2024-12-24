@@ -5,6 +5,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>YouTube Video Downloader</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+    .copyright-notice {
+        text-align: center;
+        padding: 15px 0;
+        color: #666;
+        font-size: 14px;
+    }
+    </style>
+    <meta name="description" content="Download YouTube videos easily with our free video downloader">
+    <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
+    <input type="hidden" name="csrf_token" id="csrf_token" value="{{ csrf_token }}">
 </head>
 <body class="bg-gray-100">
     <div class="container mx-auto px-4 py-8 max-w-6xl">
@@ -15,18 +26,25 @@
         </div>
 
         <!-- 状态消息 -->
-        <div id="status-message" class="mb-4 p-4 rounded-lg hidden"></div>
+        <div id="status-message" 
+             role="alert"
+             aria-live="polite"
+             class="mb-4 p-4 rounded-lg hidden">
+        </div>
 
         <!-- 下载表单 -->
         <div class="bg-white rounded-lg shadow-md p-6 mb-8">
             <div class="flex gap-2 mb-6">
                 <input type="text" 
                        id="url-input"
+                       pattern="^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\/.+$"
+                       aria-label="YouTube URL input"
                        placeholder="Enter YouTube URL" 
                        class="flex-1 px-4 py-2 border rounded-lg focus:outline-none focus:border-blue-500">
                 <button onclick="getVideoInfo()" 
-                        class="px-6 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors"
-                        id="info-btn">
+                        id="info-btn"
+                        aria-label="Get video information"
+                        class="px-6 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors">
                     Get Info
                 </button>
             </div>
@@ -46,17 +64,18 @@
                             <h3 id="video-title" class="text-2xl font-bold text-gray-800"></h3>
                             
                             <div class="flex items-center gap-4 text-gray-600">
+                                <!-- 时长显示 -->
                                 <div class="flex items-center gap-2">
                                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
                                     </svg>
                                     <span id="video-duration"></span>
                                 </div>
-                                <div class="flex items-center gap-2">
-                                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"></path>
-                                    </svg>
-                                    <span id="video-resolution"></span>
+                                <!-- 分辨率显示 - 移除文件夹图标，使用新的样式 -->
+                                <div class="flex items-center">
+                                    <span class="px-2 py-1 bg-blue-100 text-blue-800 rounded text-sm font-medium">
+                                        最高分辨率: <span id="video-resolution"></span>
+                                    </span>
                                 </div>
                             </div>
                             
@@ -96,7 +115,7 @@
                         <!-- 可用格式 -->
                         <div class="mb-4">
                             <label class="block text-gray-700 font-medium mb-2">Available Formats:</label>
-                            <div class="grid grid-cols-2 md:grid-cols-3 gap-2" id="format-options">
+                            <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2" id="format-options">
                                 <!-- 格式选项将在这里动态生成 -->
                             </div>
                         </div>
@@ -149,7 +168,7 @@
 
     <!-- 免责声明 -->
     <footer class="text-center py-4 text-gray-500 text-sm">
-        <p>视频归相关网站及作者所有，本站不存储任何视频及图片</p>
+        <p>本站仅供学习参考，视频归相关网站及作者所有，本站不存储任何视频及图片</p>
     </footer>
 
     <!-- 成功提示弹窗 -->
@@ -273,6 +292,7 @@
 
         // 状态显示函数
         function showStatus(message, type = 'info') {
+            console.log(`Status message (${type}):`, message);
             const statusDiv = document.getElementById('status-message');
             statusDiv.textContent = message;
             statusDiv.className = `mb-4 p-4 rounded-lg ${type === 'error' ? 'bg-red-100 text-red-700' : 'bg-blue-100 text-blue-700'}`;
@@ -321,46 +341,29 @@
             
             formats.forEach(format => {
                 const formatDiv = document.createElement('div');
-                formatDiv.className = 'p-3 border rounded-lg hover:bg-gray-50 cursor-pointer transition-colors';
+                formatDiv.className = 'p-1.5 border rounded-lg hover:bg-gray-50 cursor-pointer transition-colors text-sm';
                 formatDiv.onclick = () => selectFormat(formatDiv, format.format_id);
                 
-                // 确定格式类型标签
-                let typeLabel = '';
-                // 根据当前选择的格式类型显示对应标签
-                switch(formatType) {
-                    case 'combined':
-                        typeLabel = '<span class="text-xs bg-blue-100 text-blue-800 px-2 py-0.5 rounded">Video + Audio</span>';
-                        break;
-                    case 'video':
-                        typeLabel = '<span class="text-xs bg-purple-100 text-purple-800 px-2 py-0.5 rounded">Video Only</span>';
-                        break;
-                    case 'audio':
-                        typeLabel = '<span class="text-xs bg-green-100 text-green-800 px-2 py-0.5 rounded">Audio Only</span>';
-                        break;
-                }
-                
                 formatDiv.innerHTML = `
-                    <div class="flex items-center justify-between">
-                        <div class="flex-1">
-                            <div class="flex items-center gap-2">
-                                <span class="font-semibold text-gray-800">
-                                    ${format.quality_label}
-                                    ${format.fps !== 'N/A' ? ` • ${format.fps}fps` : ''}
-                                </span>
-                                ${typeLabel}
-                            </div>
-                            <div class="text-xs text-gray-500 mt-1">
-                                <div class="flex items-center gap-2">
-                                    ${format.vcodec !== 'N/A' ? `Video: ${format.vcodec}` : ''}
-                                    ${format.vcodec !== 'N/A' && format.acodec !== 'N/A' ? ' • ' : ''}
-                                    ${format.acodec !== 'N/A' ? `Audio: ${format.acodec}` : ''}
-                                </div>
+                    <div class="flex flex-col h-full">
+                        <div class="flex items-center gap-1 mb-1">
+                            <span class="font-medium text-gray-800 truncate">
+                                ${format.quality_label}
+                            </span>
+                        </div>
+                        <div class="text-xs text-gray-500">
+                            <div class="flex items-center gap-1 truncate">
+                                ${format.vcodec !== 'N/A' ? `<span>Video: ${format.vcodec}</span>` : ''}
+                                ${format.vcodec !== 'N/A' && format.acodec !== 'N/A' ? '<span class="mx-1">•</span>' : ''}
+                                ${format.acodec !== 'N/A' ? `<span>Audio: ${format.acodec}</span>` : ''}
                             </div>
                         </div>
                         ${format.filesize !== 'N/A' ? 
-                            `<span class="text-sm font-medium bg-gray-100 px-2 py-1 rounded">
-                                ${format.filesize}
-                            </span>`
+                            `<div class="text-xs text-right mt-1">
+                                <span class="bg-gray-100 px-1.5 py-0.5 rounded">
+                                    ${format.filesize}
+                                </span>
+                            </div>`
                             : ''
                         }
                     </div>
@@ -399,18 +402,18 @@
             showStatus('Fetching video information...');
             
             try {
-                const response = await fetch('/info', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        url: urlInput.value
-                    })
+                const response = await fetch(`/video-info?url=${encodeURIComponent(urlInput.value)}`, {
+                    method: 'GET'
                 });
                 
                 if (!response.ok) {
-                    throw new Error(await response.text());
+                    const errorText = await response.text();
+                    console.error('Error response:', {
+                        status: response.status,
+                        statusText: response.statusText,
+                        error: errorText
+                    });
+                    throw new Error(errorText || 'Failed to fetch video info');
                 }
                 
                 const data = await response.json();
@@ -420,16 +423,35 @@
                 document.getElementById('video-thumbnail').src = data.thumbnail;
                 document.getElementById('video-title').textContent = data.title;
                 document.getElementById('video-duration').textContent = data.duration;
+
                 // 获取最高分辨率
                 let maxHeight = 0;
                 let maxResolution = '';
-                Object.values(videoFormats).flat().forEach(format => {
+                let maxFps = 0;
+
+                // 优先从combined格式中获取最高分辨率
+                videoFormats.combined.forEach(format => {
                     if (format.height && format.height > maxHeight) {
                         maxHeight = format.height;
-                        maxResolution = `${format.width}x${format.height}`;
+                        maxResolution = format.quality_label;
+                        maxFps = format.fps;
                     }
                 });
-                document.getElementById('video-resolution').textContent = maxResolution;
+
+                // 如果combined中没有找到，再从video格式中查找
+                if (!maxResolution) {
+                    videoFormats.video.forEach(format => {
+                        if (format.height && format.height > maxHeight) {
+                            maxHeight = format.height;
+                            maxResolution = format.quality_label;
+                            maxFps = format.fps;
+                        }
+                    });
+                }
+
+                // 显示分辨率信息
+                document.getElementById('video-resolution').textContent = maxResolution || 'N/A';
+
                 // 添加视频描述
                 document.getElementById('video-description').textContent = data.description || 'No description available';
                 
@@ -439,8 +461,8 @@
                 hideStatus();
                 
             } catch (error) {
-                console.error('Error:', error);
-                showStatus(error.message || 'Failed to get video info', 'error');
+                console.error('Detailed error:', error);
+                showStatus(`Failed to get video info: ${error.message}`, 'error');
                 videoInfo.classList.add('hidden');
             } finally {
                 infoBtn.disabled = false;
@@ -464,13 +486,12 @@
             }
             
             try {
-                downloadBtn.disabled = true;
-                downloadBtn.textContent = 'Starting Download...';
-                
+                const csrfToken = document.getElementById('csrf_token').value;
                 const response = await fetch('/download', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
+                        'X-CSRFToken': csrfToken
                     },
                     body: JSON.stringify({
                         url: urlInput.value,
@@ -513,8 +534,13 @@
 
         async function openFolderPicker() {
             try {
+                const csrfToken = document.getElementById('csrf_token').value;
                 const response = await fetch('/select-folder', {
-                    method: 'POST'
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': csrfToken
+                    }
                 });
                 const data = await response.json();
                 
@@ -548,10 +574,12 @@
         // 添加打开下载文件夹的函数
         async function openDownloadFolder() {
             try {
+                const csrfToken = document.getElementById('csrf_token').value;
                 const response = await fetch('/open-folder', {
                     method: 'POST',
                     headers: {
-                        'Content-Type': 'application/json'
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': csrfToken
                     },
                     body: JSON.stringify({
                         path: document.getElementById('download-path').textContent.replace('Saved to: ', '')
@@ -565,6 +593,20 @@
                 showStatus('Failed to open folder: ' + error.message, 'error');
             }
         }
+
+        // Add URL validation
+        function validateYouTubeUrl(url) {
+            const pattern = /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\/.+$/;
+            return pattern.test(url);
+        }
+
+        urlInput.addEventListener('input', function() {
+            if (!validateYouTubeUrl(this.value)) {
+                this.setCustomValidity('Please enter a valid YouTube URL');
+            } else {
+                this.setCustomValidity('');
+            }
+        });
     </script>
 </body>
 </html>
