@@ -15,6 +15,9 @@ import tkinter as tk
 import subprocess
 import platform
 from typing import List
+from concurrent.futures import ThreadPoolExecutor
+import functools
+import time
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -49,43 +52,39 @@ DEFAULT_DOWNLOAD_PATHS = [
     DOWNLOAD_DIR
 ]
 
+# 创建线程池
+thread_pool = ThreadPoolExecutor(max_workers=4)
+
 class ConnectionManager:
     def __init__(self):
-        self.active_connections: List[WebSocket] = []
+        self.active_connections = []
         self._lock = asyncio.Lock()
-
+    
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
         async with self._lock:
             self.active_connections.append(websocket)
-        print(f"WebSocket client connected. Total connections: {len(self.active_connections)}")
-
+            print(f"New WebSocket connection. Total: {len(self.active_connections)}")
+    
     async def disconnect(self, websocket: WebSocket):
         async with self._lock:
             if websocket in self.active_connections:
                 self.active_connections.remove(websocket)
-        print(f"WebSocket client disconnected. Total connections: {len(self.active_connections)}")
-
-    async def send_personal_message(self, message: str, websocket: WebSocket):
-        try:
-            await websocket.send_text(message)
-        except Exception as e:
-            print(f"Error sending message to WebSocket: {e}")
-            await self.disconnect(websocket)
-
+                print(f"WebSocket disconnected. Total: {len(self.active_connections)}")
+    
     async def broadcast(self, message: str):
+        if not self.active_connections:
+            print("No active WebSocket connections")
+            return
+            
+        print(f"Broadcasting to {len(self.active_connections)} connections")
         async with self._lock:
-            disconnected = []
             for connection in self.active_connections:
                 try:
                     await connection.send_text(message)
                 except Exception as e:
-                    print(f"Error broadcasting to WebSocket: {e}")
-                    disconnected.append(connection)
-            
-            # 清理断开的连接
-            for conn in disconnected:
-                await self.disconnect(conn)
+                    print(f"Error sending message: {e}")
+                    await self.disconnect(connection)
 
 manager = ConnectionManager()
 
@@ -97,29 +96,41 @@ class DownloadManager:
     
     async def add_download(self, download_id, task):
         async with self._lock:
+            print(f"Adding download task: {download_id}")
             self._downloads[download_id] = {
                 'task': task,
                 'paused': False,
                 'pause_event': asyncio.Event()
             }
-            # 设置事件为set状态，允许下载进行
             self._downloads[download_id]['pause_event'].set()
     
     async def pause_download(self, download_id):
         async with self._lock:
             if download_id in self._downloads:
+                print(f"Pausing download: {download_id}")
                 self._downloads[download_id]['paused'] = True
                 self._downloads[download_id]['pause_event'].clear()
+                await manager.broadcast(json.dumps({
+                    'status': 'paused',
+                    'download_id': download_id
+                }))
                 return True
-        return False
+            print(f"Download not found for pausing: {download_id}")
+            return False
     
     async def resume_download(self, download_id):
         async with self._lock:
             if download_id in self._downloads:
+                print(f"Resuming download: {download_id}")
                 self._downloads[download_id]['paused'] = False
                 self._downloads[download_id]['pause_event'].set()
+                await manager.broadcast(json.dumps({
+                    'status': 'resumed',
+                    'download_id': download_id
+                }))
                 return True
-        return False
+            print(f"Download not found for resuming: {download_id}")
+            return False
     
     async def get_download_status(self, download_id):
         async with self._lock:
@@ -131,12 +142,16 @@ download_manager = DownloadManager()
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
+    print("New WebSocket connection request")
     await manager.connect(websocket)
     try:
         while True:
-            await websocket.receive_text()
-    except:
-        manager.disconnect(websocket)
+            data = await websocket.receive_text()
+            print(f"Received WebSocket message: {data}")
+    except Exception as e:
+        print(f"WebSocket error: {e}")
+    finally:
+        await manager.disconnect(websocket)
 
 @app.get("/")
 async def home(request: Request):
@@ -293,79 +308,92 @@ async def download_video(request: Request):
         save_path = data.get('save_path')
         download_id = data.get('download_id')
         
+        print(f"\n=== 开始处理下载请求 ===")
+        print(f"URL: {url}")
+        print(f"格式ID: {format_id}")
+        print(f"保存路径: {save_path}")
+        print(f"下载ID: {download_id}")
+        
         if not all([url, format_id, save_path, download_id]):
-            raise HTTPException(status_code=400, detail="Missing required parameters")
+            raise HTTPException(status_code=400, detail="缺少必要参数")
         
-        print(f"Starting download: URL={url}, Format={format_id}, Path={save_path}")
-        
-        ydl_opts = {
-            'format': format_id,
-            'merge_output_format': 'mp4',
-            'postprocessors': [{
-                'key': 'FFmpegVideoConvertor',
-                'preferedformat': 'mp4',
-            }],
-            'progress_hooks': [lambda d: print(f"Download progress: {d}")],
-            'quiet': False,
-            'no_warnings': False,
-            'outtmpl': os.path.join(save_path, '%(title)s.%(ext)s'),
-            
-            # 分片下载设置
-            'fragment_retries': 10,        # 分片重试次数
-            'retries': 10,                 # 整体重试次数
-            'concurrent_fragment_downloads': 8,  # 并发下载数
-            'buffersize': 1024,            # 缓冲区大小
-            'http_chunk_size': 10485760,   # 分片大小(10MB)
-            
-            # 网络设置
-            'socket_timeout': 30,          # 超时时间
-            'extractor_retries': 5,        # 解析重试次数
-            
-            # 额外的请求头
-            'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            },
-        }
+        # 创建下载目录
+        os.makedirs(save_path, exist_ok=True)
         
         try:
+            # 先获取视频信息
+            ydl_opts = {
+                'quiet': True,
+                'no_warnings': True,
+                'format': format_id
+            }
+            
+            print("获取视频信息...")
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
-                print(f"Video info extracted, starting download task")
-                # 创建下载任务
-                task = asyncio.create_task(download_task(url, ydl_opts, info, save_path, download_id))
-                # 注册下载任务
+                if not info:
+                    raise Exception("无法获取视频信息")
+                
+                print(f"视频信息获取成功: {info.get('title', 'Unknown')}")
+                
+                # 创建并启动下载任务
+                print("创建下载任务...")
+                task = asyncio.create_task(download_task(url, format_id, save_path, download_id))
                 await download_manager.add_download(download_id, task)
                 
+                print("下载任务已创建")
                 return JSONResponse({
                     "status": "success",
-                    "message": "Download started",
+                    "message": "下载任务已创建",
                     "save_path": save_path,
                     "download_id": download_id
                 })
                 
         except Exception as e:
-            print(f"Error during download: {str(e)}")
-            raise HTTPException(status_code=400, detail=str(e))
+            error_msg = f"创建下载任务失败: {str(e)}"
+            print(error_msg)
+            import traceback
+            traceback.print_exc()
+            raise HTTPException(status_code=400, detail=error_msg)
             
     except Exception as e:
-        print(f"Unexpected error: {str(e)}")
-        raise HTTPException(status_code=400, detail=str(e))
+        error_msg = f"处理下载请求失败: {str(e)}"
+        print(error_msg)
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=400, detail=error_msg)
 
-async def download_task(url, ydl_opts, info, save_path, download_id):
+# 添加ffmpeg检查函数
+def check_ffmpeg():
     try:
-        def progress_hook(d):
+        subprocess.run(['ffmpeg', '-version'], capture_output=True)
+        return True
+    except Exception:
+        return False
+
+async def download_task(url, format_id, save_path, download_id):
+    print(f"\n=== 开始下载任务 ===")
+    print(f"下载ID: {download_id}")
+    print(f"URL: {url}")
+    print(f"格式ID: {format_id}")
+    print(f"保存路径: {save_path}")
+    
+    try:
+        # 检查ffmpeg
+        if not check_ffmpeg():
+            raise Exception("未找到ffmpeg，请确保ffmpeg已正确安装并添加到系统PATH中")
+        
+        # 检查保存路径
+        if not os.path.exists(save_path):
+            os.makedirs(save_path)
+        elif not os.access(save_path, os.W_OK):
+            raise Exception(f"无法写入保存路径: {save_path}，请检查权限")
+        
+        loop = asyncio.get_running_loop()
+        
+        def progress_callback(d):
             try:
                 if d['status'] == 'downloading':
-                    # 检查是否需要暂停
-                    download_info = download_manager._downloads.get(download_id)
-                    if download_info and download_info['paused']:
-                        print(f"Download {download_id} is paused, waiting...")
-                        # 等待恢复信号
-                        asyncio.get_event_loop().run_until_complete(
-                            download_info['pause_event'].wait()
-                        )
-                        print(f"Download {download_id} resumed")
-                    
                     downloaded = d.get('downloaded_bytes', 0)
                     total = d.get('total_bytes', 0) or d.get('total_bytes_estimate', 0)
                     speed = d.get('speed', 0)
@@ -374,37 +402,86 @@ async def download_task(url, ydl_opts, info, save_path, download_id):
                     
                     if total > 0:
                         percent = (downloaded / total) * 100
-                        # 发送进度更新
-                        asyncio.create_task(manager.broadcast(json.dumps({
-                            'status': 'downloading',
-                            'percent': percent,
-                            'speed': speed,
-                            'eta': eta,
-                            'filename': filename,
-                            'download_id': download_id
-                        })))
+                        print(f"\r下载进度: {percent:.1f}% - {filename}")
                         
+                        try:
+                            # 发送进度更新
+                            future = asyncio.run_coroutine_threadsafe(
+                                manager.broadcast(json.dumps({
+                                    'status': 'downloading',
+                                    'percent': percent,
+                                    'speed': speed,
+                                    'eta': eta,
+                                    'filename': filename,
+                                    'download_id': download_id
+                                })),
+                                loop
+                            )
+                            # 等待消息发送完成
+                            future.result(timeout=5)
+                        except Exception as e:
+                            print(f"发送进度更新失败: {e}")
+                            import traceback
+                            traceback.print_exc()
+                            
             except Exception as e:
-                print(f"Error in progress hook: {str(e)}")
+                print(f"处理下载进度失败: {e}")
+                import traceback
+                traceback.print_exc()
         
-        ydl_opts['progress_hooks'] = [progress_hook]
+        # yt-dlp配置
+        ydl_opts = {
+            'format': format_id,
+            'outtmpl': os.path.join(save_path, '%(title)s.%(ext)s'),
+            'progress_hooks': [progress_callback],
+            'merge_output_format': 'mp4',
+            'quiet': False,
+            'no_warnings': False,
+            'retries': 3,
+            'fragment_retries': 3,
+            'http_chunk_size': 10485760,
+            'socket_timeout': 30,
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+        }
         
-        # 开始下载
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([url])
+        def do_download():
+            try:
+                print("开始下载...")
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    error_code = ydl.download([url])
+                    print(f"下载完成，返回代码: {error_code}")
+                    if error_code != 0:
+                        raise Exception(f"下载失败，错误代码: {error_code}")
+                    return True
+            except Exception as e:
+                print(f"下载出错: {str(e)}")
+                import traceback
+                traceback.print_exc()
+                return False
         
-        # 下载完成通知
-        await manager.broadcast(json.dumps({
-            'status': 'completed',
-            'path': save_path,
-            'download_id': download_id
-        }))
+        print("在线程池中启动下载...")
+        success = await loop.run_in_executor(thread_pool, do_download)
         
+        if success:
+            print("下载成功完成")
+            await manager.broadcast(json.dumps({
+                'status': 'completed',
+                'path': save_path,
+                'download_id': download_id
+            }))
+        else:
+            raise Exception("下载失败 - 请检查日志获取详细信息")
+            
     except Exception as e:
-        print(f"Download task error: {str(e)}")
+        error_msg = f"下载任务出错: {str(e)}"
+        print(error_msg)
+        import traceback
+        traceback.print_exc()
         await manager.broadcast(json.dumps({
             'status': 'error',
-            'error': str(e),
+            'error': error_msg,
             'download_id': download_id
         }))
 
